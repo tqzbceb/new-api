@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,14 @@ func getDiscordUserInfoByCode(code string) (*DiscordUser, error) {
 		return nil, errors.New("无效的参数")
 	}
 
+	// 支持通过 Cloudflare Worker 代理访问 Discord API
+	discordBase := "https://discord.com/api/v10"
+	proxyURL := os.Getenv("DISCORD_PROXY_URL")
+	proxySecret := os.Getenv("PROXY_SECRET")
+	if proxyURL != "" {
+		discordBase = proxyURL + "/discord"
+	}
+
 	values := url.Values{}
 	values.Set("client_id", system_setting.GetDiscordSettings().ClientId)
 	values.Set("client_secret", system_setting.GetDiscordSettings().ClientSecret)
@@ -45,14 +54,19 @@ func getDiscordUserInfoByCode(code string) (*DiscordUser, error) {
 	values.Set("grant_type", "authorization_code")
 	values.Set("redirect_uri", fmt.Sprintf("%s/oauth/discord", system_setting.ServerAddress))
 	formData := values.Encode()
-	req, err := http.NewRequest("POST", "https://discord.com/api/v10/oauth2/token", strings.NewReader(formData))
+
+	req, err := http.NewRequest("POST", discordBase+"/oauth2/token", strings.NewReader(formData))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if proxySecret != "" {
+		req.Header.Set("X-Proxy-Secret", proxySecret)
+	}
+
 	client := http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second, // 从 5s 增加到 30s
 	}
 	res, err := client.Do(req)
 	if err != nil {
@@ -71,11 +85,15 @@ func getDiscordUserInfoByCode(code string) (*DiscordUser, error) {
 		return nil, errors.New("Discord 获取 Token 失败，请检查设置！")
 	}
 
-	req, err = http.NewRequest("GET", "https://discord.com/api/v10/users/@me", nil)
+	req, err = http.NewRequest("GET", discordBase+"/users/@me", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+discordResponse.AccessToken)
+	if proxySecret != "" {
+		req.Header.Set("X-Proxy-Secret", proxySecret)
+	}
+
 	res2, err := client.Do(req)
 	if err != nil {
 		common.SysLog(err.Error())
